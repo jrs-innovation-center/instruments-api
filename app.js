@@ -2,20 +2,30 @@ require('dotenv').config()
 
 const express = require('express')
 const app = express()
-const dal = require('./dal.js')
+const dal = require('./dal-sql.js')
 const port = process.env.PORT || 4000
 const HTTPError = require('node-http-error')
 const bodyParser = require('body-parser')
-const { pathOr, keys, difference, path } = require('ramda')
-
 const checkRequiredFields = require('./lib/check-required-fields')
-const checkInstrumentReqFields = checkRequiredFields([
+const ckInstrumentFields = checkRequiredFields([
   'name',
   'category',
   'group',
   'retailPrice',
   'manufacturer'
 ])
+const ckInstrumentUpdateFields = checkRequiredFields([
+  '_id',
+  '_rev',
+  'type',
+  'name',
+  'category',
+  'group',
+  'retailPrice',
+  'manufacturer'
+])
+
+const { pathOr, path } = require('ramda')
 
 app.use(bodyParser.json())
 
@@ -25,95 +35,72 @@ app.get('/', function(req, res, next) {
 
 //   CREATE  - POST /instruments
 app.post('/instruments', function(req, res, next) {
-  const arrFieldsFailedValidation = checkInstrumentReqFields(req.body)
-  if (arrFieldsFailedValidation.length > 0) {
-    return next(
-      new HTTPError(400, 'Missing Required Fields', {
-        fields: arrFieldsFailedValidation
+  //name, category, group, retailPrice, and manufacturer
+
+  const instrument = pathOr(null, ['body'], req)
+  console.log('instrument', instrument)
+  const ckInstrumentFieldsResults = ckInstrumentFields(instrument)
+  console.log('ckInstrumentFieldsResults', ckInstrumentFieldsResults)
+
+  ckInstrumentFieldsResults.length > 0
+    ? next(
+        new HTTPError(400, 'missing required fields', {
+          ckInstrumentFieldsResults
+        })
+      )
+    : dal.addInstrument(instrument, function(err, result) {
+        if (err) return next(new HTTPError(err.status, err.message, err))
+        res.status(201).send(result)
       })
-    )
-  }
-
-  dal.addInstrument(req.body, function(err, data) {
-    if (err) return next(new HTTPError(err.status, err.message, err))
-    res.status(201).send(data)
-  })
 })
 
-// READ - GET /instruments/:id
 app.get('/instruments/:id', function(req, res, next) {
-  dal.getInstrument(req.params.id, function(err, data) {
-    if (err) return next(new HTTPError(err.status, err.message, err))
-    if (data) {
-      res.status(200).send(data)
-    } else {
-      next(new HTTPError(404, 'Not Found', { path: req.path }))
-    }
-  })
-})
+  const id = path(['params', 'id'], req)
 
-//   UPDATE -  PUT /instruments/:id
+  dal.getInstrument(
+    id,
+    (err, result) =>
+      err
+        ? next(new HTTPError(err.status, err.message, err))
+        : res.status(200).send(result)
+  )
+})
 
 app.put('/instruments/:id', function(req, res, next) {
-  const instrumentId = req.params.id
-  const requestBody = pathOr('no body', ['body'], req)
+  const id = path(['params', 'id'], req)
+  const body = pathOr(null, ['body'], req)
 
-  if (requestBody === 'no body') {
-    return next(new HTTPError(400, 'Missing instrument json in request body.'))
-  }
+  const updateResults = ckInstrumentUpdateFields(body)
 
-  const arrFieldsFailedValidation = checkInstrumentReqFields(requestBody)
-
-  if (arrFieldsFailedValidation.length > 0) {
-    return next(
-      new HTTPError(400, 'Missing Required Fields', {
-        fields: arrFieldsFailedValidation
+  updateResults.length === 0
+    ? dal.updateInstrument(body, function(err, result) {
+        if (err) next(new HTTPError(err.status, err.message, err))
+        res.status(200).send(result)
       })
-    )
-  }
-
-  if (requestBody.type != 'instrument') {
-    return next(new HTTPError(400, "'type' field value must be equal to 'cat'"))
-  }
-
-  if (instrumentId != requestBody._id) {
-    return next(
-      new HTTPError(
-        400,
-        'The instrument id in the path must match the instrument id in the request body'
+    : next(
+        new HTTPError(400, 'Missing Required Fields', {
+          missingRequiredFields: updateResults
+        })
       )
-    )
-  }
-
-  dal.updateInstrument(requestBody, function(err, data) {
-    if (err) return next(new HTTPError(err.status, err.message, err))
-    res.status(200).send(data)
-  })
 })
 
-// DELETE -  DELETE /instruments/:id
-app.delete('/instruments/:id', function(req, res, next) {
-  const instrumentId = req.params.id
-  console.log('instrumentId id: ', instrumentId)
-  dal.deleteInstrument(instrumentId, function(err, data) {
-    if (err) return next(new HTTPError(err.status, err.message, err))
-
-    res.status(200).send(data)
-  })
+app.delete('/instruments/:id/parts/:partId', function(req, res, next) {
+  dal.deleteInstrument(path(['params', 'id'], req), callbackHelper(next, res))
 })
 
-//   LIST - GET /instruments
 app.get('/instruments', function(req, res, next) {
-  var limit = pathOr(5, ['query', 'limit'], req)
-  limit = Number(limit)
+  console.log('req.query', JSON.stringify(req.query, null, 2))
 
-  const filter = pathOr(null, ['query', 'filter'], req)
+  const limit = pathOr(5, ['query', 'limit'], req)
   const lastItem = pathOr(null, ['query', 'lastItem'], req)
+  const filter = pathOr(null, ['query', 'filter'], req)
 
-  dal.listInstruments(lastItem, filter, limit, function(err, data) {
-    if (err) return next(new HTTPError(err.status, err.message, err))
-    res.status(200).send(data)
-  })
+  dal.listInstruments(
+    lastItem,
+    filter,
+    Number(limit),
+    callbackHelper(next, res)
+  )
 })
 
 app.use(function(err, req, res, next) {
@@ -123,3 +110,11 @@ app.use(function(err, req, res, next) {
 })
 
 app.listen(port, () => console.log('API Running on port:', port))
+
+/////////////////////////
+// HELPERS
+////////////////////////
+const callbackHelper = (next, response) => (err, result) => {
+  if (err) next(new HTTPError(err.status, err.message, err))
+  response.status(200).send(result)
+}
