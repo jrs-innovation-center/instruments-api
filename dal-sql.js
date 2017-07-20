@@ -1,23 +1,18 @@
 const mysql = require('mysql')
 const pkGenerator = require('./lib/build-primary-key')
 const instrumentPKGenerator = pkGenerator('instrument_')
-const { assoc, omit, head, path, compose } = require('ramda')
+const { assoc, omit, head, path, compose, prop } = require('ramda')
 const HTTPError = require('node-http-error')
 
 //////////////////////
 //   Instruments
 //////////////////////
-const addInstrument = (instrument, callback) => {
-  createInstrument(instrument, callback)
-}
-
+const addInstrument = (instrument, callback) => create(instrument, callback)
 const getInstrument = (instrumentId, callback) =>
-  getDocByID('instrument', instrumentId, formatInstrument, callback)
-
-const updateInstrument = (updatedInstrument, callback) =>
-  update(updatedInstrument, callback)
+  read('instrument', instrumentId, formatInstrument, callback)
+const updateInstrument = (instrument, callback) => update(instrument, callback)
 const deleteInstrument = (instrumentId, callback) =>
-  deleteDoc(instrumentId, callback)
+  delete (instrumentId, callback)
 
 const listInstruments = (lastItem, filter, limit, callback) => {
   var query = {}
@@ -55,7 +50,83 @@ function createConnection() {
   })
 }
 
-function getDocByID(tablename, id, formatter, callback) {
+const formatInstrument = instrument => {
+  // COUCH DATA- target
+  // {
+  //   "_id": "instrument_cello_cello_platinum",
+  //   "_rev": "1-58f65a903e5dbb7014fbaed615679fc4",
+  //   "name": "Cello Platinum",
+  //   "type": "instrument",
+  //   "category": "cello",
+  //   "group": "strings",
+  //   "retailPrice": 600,
+  //   "manufacturer": "Strings, Inc."
+  // }
+
+  // rename id to _id
+  instrument = assoc('_id', path(['ID'], instrument), instrument)
+  instrument = omit('ID', instrument)
+
+  // rename instrumentGroup to group
+  instrument = assoc('group', path(['instrumentGroup'], instrument), instrument)
+  instrument = omit('instrumentGroup', instrument)
+
+  // add a key of _rev
+  instrument = assoc('_rev', null, instrument)
+  // add a key of type
+  instrument = assoc('type', 'instrument', instrument)
+
+  return instrument
+}
+
+const prepInstrumentForInsert = instrument => {
+  instrument = assoc('instrumentGroup', prop('group', instrument), instrument)
+
+  return compose(omit('group'), omit('_rev'), omit('_id'), omit('type'))(
+    instrument
+  )
+}
+
+const prepInstrumentForUpdate = instrument => {
+  instrument = assoc('instrumentGroup', prop('group', instrument), instrument)
+  instrument = assoc('ID', prop('_id', instrument), instrument)
+
+  return compose(omit('group'), omit('_rev'), omit('_id'), omit('type'))(
+    instrument
+  )
+}
+
+function create(instrument, callback) {
+  if (instrument) {
+    const connection = createConnection()
+
+    connection.query(
+      'INSERT INTO instrument SET ? ',
+      prepInstrumentForInsert(instrument),
+      function(err, result) {
+        if (err) return callback(err)
+        if (typeof result !== 'undefined' && result.insertId !== 'undefined') {
+          callback(null, {
+            ok: true,
+            id: result.insertId
+          })
+        } else {
+          callback(null, {
+            ok: false,
+            id: null
+          })
+        }
+      }
+    )
+    connection.end(function(err) {
+      if (err) return err
+    })
+  } else {
+    return callback(new HTTPError(400, 'Missing instrument'))
+  }
+}
+
+function read(tablename, id, formatter, callback) {
   console.log('getDocByID was called:', tablename, id)
   if (id) {
     const connection = createConnection()
@@ -106,61 +177,29 @@ function getDocByID(tablename, id, formatter, callback) {
   }
 }
 
-const formatInstrument = instrument => {
-  // COUCH DATA- target
-  // {
-  //   "_id": "instrument_cello_cello_platinum",
-  //   "_rev": "1-58f65a903e5dbb7014fbaed615679fc4",
-  //   "name": "Cello Platinum",
-  //   "type": "instrument",
-  //   "category": "cello",
-  //   "group": "strings",
-  //   "retailPrice": 600,
-  //   "manufacturer": "Strings, Inc."
-  // }
-
-  // rename id to _id
-  instrument = assoc('_id', path(['ID'], instrument), instrument)
-  instrument = omit('ID', instrument)
-
-  // rename instrumentGroup to group
-  instrument = assoc('group', path(['instrumentGroup'], instrument), instrument)
-  instrument = omit('instrumentGroup', instrument)
-
-  // add a key of _rev
-  instrument = assoc('_rev', null, instrument)
-  // add a key of type
-  instrument = assoc('type', 'instrument', instrument)
-
-  return instrument
-}
-
-const prepInstrumentForInsert = instrument => {
-  instrument = assoc('instrumentGroup', path(['group'], instrument), instrument)
-
-  return compose(omit('group'), omit('_rev'), omit('_id'), omit('type'))(
-    instrument
-  )
-}
-
-function createInstrument(instrument, callback) {
+function update(instrument, callback) {
   if (instrument) {
-    const connection = createConnection()
+    var connection = createConnection()
+
+    instrument = prepInstrumentForUpdate(instrument)
 
     connection.query(
-      'INSERT INTO instrument SET ? ',
-      prepInstrumentForInsert(instrument),
+      'UPDATE instrument SET ? WHERE ID = ' + instrument.ID,
+      instrument,
       function(err, result) {
         if (err) return callback(err)
-        if (typeof result !== 'undefined' && result.insertId !== 'undefined') {
-          callback(null, {
-            ok: true,
-            id: result.insertId
+        if (typeof result !== 'undefined' && result.affectedRows === 0) {
+          return callback({
+            error: 'not_found',
+            reason: 'missing',
+            name: 'not_found',
+            status: 404,
+            message: 'missing'
           })
-        } else {
-          callback(null, {
-            ok: false,
-            id: null
+        } else if (typeof result !== 'undefined' && result.affectedRows === 1) {
+          return callback(null, {
+            ok: true,
+            id: instrument.ID
           })
         }
       }
@@ -175,7 +214,8 @@ function createInstrument(instrument, callback) {
 
 const dal = {
   getInstrument,
-  addInstrument
+  addInstrument,
+  updateInstrument
 }
 
 module.exports = dal

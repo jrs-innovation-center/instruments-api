@@ -68,6 +68,12 @@ app.put('/instruments/:id', function(req, res, next) {
 
   const updateResults = ckInstrumentUpdateFields(body)
 
+  if (id != pathOr(null, ['body', '_id'], req)) {
+    return next(
+      new HTTPError(400, 'The id value within path and body must match.')
+    )
+  }
+
   updateResults.length === 0
     ? dal.updateInstrument(body, function(err, result) {
         if (err) next(new HTTPError(err.status, err.message, err))
