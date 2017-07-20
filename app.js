@@ -35,12 +35,8 @@ app.get('/', function(req, res, next) {
 
 //   CREATE  - POST /instruments
 app.post('/instruments', function(req, res, next) {
-  //name, category, group, retailPrice, and manufacturer
-
   const instrument = pathOr(null, ['body'], req)
-  console.log('instrument', instrument)
   const ckInstrumentFieldsResults = ckInstrumentFields(instrument)
-  console.log('ckInstrumentFieldsResults', ckInstrumentFieldsResults)
 
   ckInstrumentFieldsResults.length > 0
     ? next(

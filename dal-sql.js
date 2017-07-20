@@ -1,14 +1,14 @@
 const mysql = require('mysql')
 const pkGenerator = require('./lib/build-primary-key')
 const instrumentPKGenerator = pkGenerator('instrument_')
-const { assoc, omit, head, path } = require('ramda')
+const { assoc, omit, head, path, compose } = require('ramda')
 const HTTPError = require('node-http-error')
 
 //////////////////////
 //   Instruments
 //////////////////////
 const addInstrument = (instrument, callback) => {
-  add(instrument, callback)
+  createInstrument(instrument, callback)
 }
 
 const getInstrument = (instrumentId, callback) =>
@@ -58,7 +58,7 @@ function createConnection() {
 function getDocByID(tablename, id, formatter, callback) {
   console.log('getDocByID was called:', tablename, id)
   if (id) {
-    var connection = createConnection()
+    const connection = createConnection()
 
     //  THIS IS WHAT AN INSTRUMETN DOC LOOKS LIKE IN COUCHDB
     //  WE HAVD TO TRANSFORM THE ROW RETURNED FROM MYSQL INTO THIS FORMAT
@@ -91,15 +91,11 @@ function getDocByID(tablename, id, formatter, callback) {
             })
           )
         }
-        if (data) {
-          // unbox the first (head) object from the array.
-          // format the object using the supplied formatter, such as formatInstrument()\
-          const formatted = formatter(head(data))
-          console.log('getDocByID formatted data: ', formatted)
-
-          return callback(null, formatted)
-          //TODO: remove this commentted code ... return callback(null, data.map(compose(parseToJSON, formatter))[0]);
-        }
+        // unbox the first (head) object from the array.
+        // format the object using the supplied formatter, such as formatInstrument()\
+        const formatted = formatter(head(data))
+        console.log('getDocByID formatted data: ', formatted)
+        return callback(null, formatted)
       }
     )
     connection.end(function(err) {
@@ -139,55 +135,47 @@ const formatInstrument = instrument => {
   return instrument
 }
 
-const prepInstrumentForDB = instrument => omit('type', instrument)
+const prepInstrumentForInsert = instrument => {
+  instrument = assoc('instrumentGroup', path(['group'], instrument), instrument)
+
+  return compose(omit('group'), omit('_rev'), omit('_id'), omit('type'))(
+    instrument
+  )
+}
 
 function createInstrument(instrument, callback) {
-  // Call to mysql retrieving a document with the given _id value.
-  if (typeof data == 'undefined' || data === null) {
-    return callback(new Error('400Missing data for create'))
-  } else if (data.hasOwnProperty('_id') === true) {
-    return callback(
-      new Error(
-        '400Unnecessary id property within data. ' +
-          'createPerson() will generate a unique id'
-      )
-    )
-  } else if (data.hasOwnProperty('lastName') !== true) {
-    return callback(new Error('400Missing lastName property within data'))
-  } else if (data.hasOwnProperty('firstName') !== true) {
-    return callback(new Error('400Missing firstName property within data'))
-  } else if (data.hasOwnProperty('email') !== true) {
-    return callback(new Error('400Missing email property within data'))
-  } else {
-    //TO DO:  Exercise. map function to format phone number
-    var connection = createConnection()
+  if (instrument) {
+    const connection = createConnection()
 
-    connection.query('INSERT INTO person SET ? ', prepDataForDB(data), function(
-      err,
-      result
-    ) {
-      if (err) return callback(err)
-      if (typeof result !== 'undefined' && result.insertId !== 'undefined') {
-        return callback(null, {
-          ok: true,
-          id: result.insertId
-        })
+    connection.query(
+      'INSERT INTO instrument SET ? ',
+      prepInstrumentForInsert(instrument),
+      function(err, result) {
+        if (err) return callback(err)
+        if (typeof result !== 'undefined' && result.insertId !== 'undefined') {
+          callback(null, {
+            ok: true,
+            id: result.insertId
+          })
+        } else {
+          callback(null, {
+            ok: false,
+            id: null
+          })
+        }
       }
-    })
+    )
     connection.end(function(err) {
       if (err) return err
     })
+  } else {
+    return callback(new HTTPError(400, 'Missing instrument'))
   }
 }
 
 const dal = {
-  getInstrument
+  getInstrument,
+  addInstrument
 }
-
-//   listInstruments,
-//   getInstrument,
-//   deleteInstrument,
-//   updateInstrument
-// }
 
 module.exports = dal
