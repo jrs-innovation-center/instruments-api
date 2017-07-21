@@ -86,7 +86,7 @@ app.put('/instruments/:id', function(req, res, next) {
       )
 })
 
-app.delete('/instruments/:id/parts/:partId', function(req, res, next) {
+app.delete('/instruments/:id', function(req, res, next) {
   dal.deleteInstrument(path(['params', 'id'], req), callbackHelper(next, res))
 })
 
