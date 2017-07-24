@@ -2,7 +2,8 @@ require('dotenv').config()
 
 const express = require('express')
 const app = express()
-const dal = require('./dal.js')
+//const dal = require('./dal.js')
+const dal = require('./dal-sql2.js')
 const port = process.env.PORT || 4000
 const HTTPError = require('node-http-error')
 const bodyParser = require('body-parser')
