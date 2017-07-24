@@ -1,86 +1,178 @@
 const mysql = require('mysql')
-const pkGenerator = require('./lib/build-primary-key')
-const instrumentPKGenerator = pkGenerator('instrument_')
-const { assoc, omit, head, path, compose, prop } = require('ramda')
 const HTTPError = require('node-http-error')
+const {
+  path,
+  assoc,
+  omit,
+  compose,
+  head,
+  propOr,
+  prop,
+  map,
+  split,
+  last
+} = require('ramda')
 
-//////////////////////
-//   Instruments
-//////////////////////
-const addInstrument = (instrument, callback) => create(instrument, callback)
+const addInstrument = (instrument, callback) => {
+  createInstrument(instrument, callback)
+}
 const getInstrument = (instrumentId, callback) =>
   read('instrument', instrumentId, formatInstrument, callback)
 const updateInstrument = (instrument, callback) => update(instrument, callback)
+
 const deleteInstrument = (instrumentId, callback) =>
   deleteRow('instrument', instrumentId, callback)
 
 const listInstruments = (lastItem, filter, limit, callback) => {
-  var query = {}
-
   if (filter) {
-    // filter = "category:cello"
-    const arrFilter = split(':', filter) // ['category','cello']
-    const filterField = head(arrFilter) // "category"
-    const filterValue = last(arrFilter) // "cello"
-  } else if (lastItem) {
-    // They are asking to paginate.  Give them the next page of results
-  } else {
-    // Give the first page of results.
+    const arrFilter = split(':', filter)
+    const filterField = head(arrFilter) === 'group'
+      ? 'instrumentGroup'
+      : head(arrFilter)
+    const filterValue = last(arrFilter)
+
+    filter = `${filterField}:${filterValue}`
   }
 
-  console.log('query:', query)
-  findDocs(query, callback)
+  queryDB('instrument', lastItem, filter, limit, function(err, data) {
+    if (err) return callback(err)
+    callback(null, map(formatInstrument, data))
+  })
 }
 
-////////////////////////////
-//    helper functions
-////////////////////////////
-
-// MYSQL_HOST=0.0.0.0
-// MYSQL_USER="root"
-// MYSQL_PASSWORD=mypassword
-// MYSQL_DATABASE=relief_tracker
+//////////////////////////////
+///  HELPERS
+//////////////////////////////
 
 function createConnection() {
   return mysql.createConnection({
-    host: process.env.MYSQL_HOST,
     user: process.env.MYSQL_USER,
+    host: process.env.MYSQL_HOST,
     password: process.env.MYSQL_PASSWORD,
     database: process.env.MYSQL_DATABASE
   })
 }
 
-const formatInstrument = instrument => {
-  // COUCH DATA- target
-  // {
-  //   "_id": "instrument_cello_cello_platinum",
-  //   "_rev": "1-58f65a903e5dbb7014fbaed615679fc4",
-  //   "name": "Cello Platinum",
-  //   "type": "instrument",
-  //   "category": "cello",
-  //   "group": "strings",
-  //   "retailPrice": 600,
-  //   "manufacturer": "Strings, Inc."
-  // }
+const createInstrument = (instrument, callback) => {
+  if (instrument) {
+    const connection = createConnection()
+    connection.query(
+      'INSERT INTO instrument SET ? ',
+      prepInstrumentForInsert(instrument),
+      function(err, result) {
+        if (err) return callback(err)
+        if (propOr(null, 'insertId', result)) {
+          callback(null, { ok: true, id: result.insertId })
+        } else {
+          callback(null, { ok: false, id: null })
+        }
+      }
+    )
 
-  // rename id to _id
-  instrument = assoc('_id', path(['ID'], instrument), instrument)
-  instrument = omit('ID', instrument)
+    connection.end(function(err) {
+      if (err) return err
+    })
+  } else {
+    return callback(new HTTPError(400, 'Missing instrument'))
+  }
+}
 
-  // rename instrumentGroup to group
-  instrument = assoc('group', path(['instrumentGroup'], instrument), instrument)
-  instrument = omit('instrumentGroup', instrument)
+const read = (tableName, id, formatter, callback) => {
+  if (id && tableName) {
+    const connection = createConnection()
 
-  // add a key of _rev
-  instrument = assoc('_rev', null, instrument)
-  // add a key of type
-  instrument = assoc('type', 'instrument', instrument)
+    connection.query(
+      'SELECT * FROM ' + connection.escapeId(tableName) + ' WHERE ID = ? ',
+      [id],
+      function(err, result) {
+        if (err) return callback(err)
+        if (propOr(0, 'length', result) > 0) {
+          const formattedResult = formatter(head(result))
+          console.log('Formatted Result: ', formattedResult)
+          return callback(null, formattedResult)
+        } else {
+          //send back a 404
 
-  return instrument
+          return callback(
+            new HTTPError(404, 'missing', {
+              name: 'not_found',
+              error: 'not found',
+              reason: 'missing'
+            })
+          )
+        }
+      }
+    )
+  }
+}
+
+const update = (instrument, callback) => {
+  if (instrument) {
+    const connection = createConnection()
+    instrument = prepInstrumentForUpdate(instrument)
+
+    connection.query(
+      'UPDATE instrument SET ? WHERE ID = ?',
+      [instrument, instrument.ID],
+      function(err, result) {
+        if (err) return callback(err)
+        console.log('Updated result: ', result)
+
+        if (propOr(0, 'affectedRows', result) === 1) {
+          return callback(null, { ok: true, id: instrument.ID })
+        } else if (propOr(0, 'affectedRows', result) === 0) {
+          return callback(
+            new HTTPError(404, 'missing', {
+              name: 'not_found',
+              error: 'not found',
+              reason: 'missing'
+            })
+          )
+        }
+      }
+    )
+
+    connection.end(function(err) {
+      if (err) return err
+    })
+  } else {
+    return callback(new HTTPError(400, 'Missing information'))
+  }
+}
+
+const deleteRow = (tableName, id, callback) => {
+  if (tableName && id) {
+    const connection = createConnection()
+    console.log('tableName: ', tableName)
+    console.log('id: ', id)
+
+    connection.query(
+      'DELETE FROM ' + connection.escapeId(tableName) + ' WHERE ID = ?',
+      [id],
+      function(err, result) {
+        if (err) return callback(err)
+        if (result && result.affectedRows === 1) {
+          return callback(null, { ok: true, id: id })
+        } else if (result && result.affectedRows === 0) {
+          return callback(
+            new HTTPError(404, 'missing', {
+              name: 'not_found',
+              error: 'not found',
+              reason: 'missing'
+            })
+          )
+        }
+      }
+    )
+
+    connection.end(err => err)
+  } else {
+    return callback(new HTTPError(400, 'Missing id or entity name.'))
+  }
 }
 
 const prepInstrumentForInsert = instrument => {
-  instrument = assoc('instrumentGroup', prop('group', instrument), instrument)
+  instrument = assoc('instrumentGroup', path(['group'], instrument), instrument)
 
   return compose(omit('group'), omit('_rev'), omit('_id'), omit('type'))(
     instrument
@@ -91,164 +183,87 @@ const prepInstrumentForUpdate = instrument => {
   instrument = assoc('instrumentGroup', prop('group', instrument), instrument)
   instrument = assoc('ID', prop('_id', instrument), instrument)
 
-  return compose(omit('group'), omit('_rev'), omit('_id'), omit('type'))(
+  return compose(omit('_id'), omit('_rev'), omit('type'), omit('group'))(
     instrument
   )
 }
 
-function create(instrument, callback) {
-  if (instrument) {
-    const connection = createConnection()
-
-    connection.query(
-      'INSERT INTO instrument SET ? ',
-      prepInstrumentForInsert(instrument),
-      function(err, result) {
-        if (err) return callback(err)
-        if (typeof result !== 'undefined' && result.insertId !== 'undefined') {
-          callback(null, {
-            ok: true,
-            id: result.insertId
-          })
-        } else {
-          callback(null, {
-            ok: false,
-            id: null
-          })
-        }
-      }
-    )
-    connection.end(function(err) {
-      if (err) return err
-    })
-  } else {
-    return callback(new HTTPError(400, 'Missing instrument'))
-  }
+const formatInstrument = instrument => {
+  instrument = assoc('_id', prop('ID', instrument), instrument)
+  instrument = assoc('group', prop('instrumentGroup', instrument), instrument)
+  return compose(
+    omit('ID'),
+    omit('instrumentGroup'),
+    assoc('_rev', null),
+    assoc('type', 'instrument')
+  )(instrument)
 }
 
-function read(tablename, id, formatter, callback) {
-  console.log('getDocByID was called:', tablename, id)
-  if (id) {
-    const connection = createConnection()
+const queryDB = (tableName, lastItem, filter, limit, callback) => {
+  limit = limit ? limit : 5
 
-    //  THIS IS WHAT AN INSTRUMETN DOC LOOKS LIKE IN COUCHDB
-    //  WE HAVD TO TRANSFORM THE ROW RETURNED FROM MYSQL INTO THIS FORMAT
-    //
+  const connection = createConnection()
 
-    // {
-    //   "_id": "instrument_cello_cello_platinum",
-    //   "_rev": "1-58f65a903e5dbb7014fbaed615679fc4",
-    //   "name": "Cello Platinum",
-    //   "type": "instrument",
-    //   "category": "cello",
-    //   "group": "strings",
-    //   "retailPrice": 600,
-    //   "manufacturer": "Strings, Inc."
-    // }
+  if (filter) {
+    console.log('FILTER MODE')
+    const arrFilter = split(':', filter)
+    const filterField = head(arrFilter)
+    const filterValue = last(arrFilter)
 
-    connection.query(
-      'SELECT * FROM ' + connection.escapeId(tablename) + ' WHERE id = ?',
-      [id],
-      function(err, data) {
-        if (err) return callback(err)
-        if (data.length === 0) {
-          return callback(
-            new HTTPError(404, 'not_found', {
-              error: 'not_found',
-              reason: 'missing',
-              name: 'not_found',
-              status: 404,
-              message: 'missing'
-            })
-          )
-        }
-        // unbox the first (head) object from the array.
-        // format the object using the supplied formatter, such as formatInstrument()\
-        const formatted = formatter(head(data))
-        console.log('getDocByID formatted data: ', formatted)
-        return callback(null, formatted)
-      }
-    )
-    connection.end(function(err) {
-      if (err) return err
+    let whereClause = ` WHERE ${filterField} = ?`
+    let sql = `SELECT *
+       FROM ${connection.escapeId(tableName)}
+       ${whereClause}
+       ORDER BY name
+       LIMIT ${limit}`
+
+    console.log('SQL: ', sql)
+
+    connection.query(sql, [filterValue], function(err, result) {
+      if (err) return callback(err)
+      return callback(null, result)
+    })
+  } else if (lastItem) {
+    console.log('NEXT PAGE MODE')
+    let whereClause = ' WHERE name > ? '
+    let sql = `SELECT *
+     FROM ${connection.escapeId(tableName)}
+     ${whereClause}
+     ORDER BY name
+     LIMIT ${limit}`
+
+    console.log('SQL: ', sql)
+
+    connection.query(sql, [lastItem], function(err, result) {
+      if (err) return callback(err)
+      return callback(null, result)
     })
   } else {
-    return callback(new HTTPError(400, 'Missing id parameter'))
-  }
-}
+    console.log('FIRST PAGE MODE')
+    let whereClause = " WHERE name > '' "
+    let sql = `SELECT *
+       FROM ${connection.escapeId(tableName)}
+       ${whereClause}
+       ORDER BY name
+       LIMIT ${limit}`
 
-function update(instrument, callback) {
-  if (instrument) {
-    var connection = createConnection()
+    console.log('SQL: ', sql)
 
-    instrument = prepInstrumentForUpdate(instrument)
-
-    connection.query(
-      'UPDATE instrument SET ? WHERE ID = ' + instrument.ID,
-      instrument,
-      function(err, result) {
-        if (err) return callback(err)
-        if (typeof result !== 'undefined' && result.affectedRows === 0) {
-          return callback({
-            error: 'not_found',
-            reason: 'missing',
-            name: 'not_found',
-            status: 404,
-            message: 'missing'
-          })
-        } else if (typeof result !== 'undefined' && result.affectedRows === 1) {
-          return callback(null, {
-            ok: true,
-            id: instrument.ID
-          })
-        }
-      }
-    )
-    connection.end(function(err) {
-      if (err) return err
+    connection.query(sql, function(err, result) {
+      if (err) return callback(err)
+      return callback(null, result)
     })
-  } else {
-    return callback(new HTTPError(400, 'Missing instrument'))
   }
-}
 
-function deleteRow(tablename, id, callback) {
-  if (id) {
-    var connection = createConnection()
-    connection.query(
-      'DELETE FROM ' + connection.escapeId(tablename) + ' WHERE id = ?',
-      [id],
-      function(err, result) {
-        if (err) return callback(err)
-        if (result && result.affectedRows === 0) {
-          return callback({
-            error: 'not_found',
-            reason: 'missing',
-            name: 'not_found',
-            status: 404,
-            message: 'missing'
-          })
-        } else if (result && result.affectedRows === 1) {
-          return callback(null, {
-            ok: true,
-            id: id
-          })
-        }
-      }
-    )
-    connection.end(function(err) {
-      if (err) return err
-    })
-  } else {
-    return callback(new HTTPError(400, 'Missing id parameter'))
-  }
+  connection.end(err => err)
 }
 
 const dal = {
-  getInstrument,
   addInstrument,
+  getInstrument,
   updateInstrument,
-  deleteInstrument
+  deleteInstrument,
+  listInstruments
 }
 
 module.exports = dal

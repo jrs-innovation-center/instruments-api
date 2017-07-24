@@ -1,6 +1,17 @@
 const mysql = require('mysql')
 const HTTPError = require('node-http-error')
-const { path, assoc, omit, compose, head, propOr, prop } = require('ramda')
+const {
+  path,
+  assoc,
+  omit,
+  compose,
+  head,
+  propOr,
+  prop,
+  map,
+  split,
+  last
+} = require('ramda')
 
 const addInstrument = (instrument, callback) => {
   createInstrument(instrument, callback)
@@ -11,6 +22,24 @@ const updateInstrument = (instrument, callback) => update(instrument, callback)
 
 const deleteInstrument = (instrumentId, callback) =>
   deleteRow('instrument', instrumentId, callback)
+
+const listInstruments = (lastItem, filter, limit, callback) => {
+  if (filter) {
+    const arrFilter = split(':', filter)
+    const filterField = head(arrFilter) === 'group'
+      ? 'instrumentGroup'
+      : head(arrFilter)
+    const filterValue = last(arrFilter)
+
+    filter = `${filterField}:${filterValue}`
+  }
+
+  queryDB('instrument', lastItem, filter, limit, function(err, data) {
+    if (err) return callback(err)
+    callback(null, map(formatInstrument, data))
+  })
+}
+
 //////////////////////////////
 ///  HELPERS
 //////////////////////////////
@@ -170,6 +199,71 @@ const formatInstrument = instrument => {
   )(instrument)
 }
 
-const dal = { addInstrument, getInstrument, updateInstrument, deleteInstrument }
+const queryDB = (tableName, lastItem, filter, limit, callback) => {
+  limit = limit ? limit : 5
+
+  const connection = createConnection()
+
+  if (filter) {
+    console.log('FILTER MODE')
+    const arrFilter = split(':', filter)
+    const filterField = head(arrFilter)
+    const filterValue = last(arrFilter)
+
+    let whereClause = ` WHERE ${filterField} = ?`
+    let sql = `SELECT *
+       FROM ${connection.escapeId(tableName)}
+       ${whereClause}
+       ORDER BY name
+       LIMIT ${limit}`
+
+    console.log('SQL: ', sql)
+
+    connection.query(sql, [filterValue], function(err, result) {
+      if (err) return callback(err)
+      return callback(null, result)
+    })
+  } else if (lastItem) {
+    console.log('NEXT PAGE MODE')
+    let whereClause = ' WHERE name > ? '
+    let sql = `SELECT *
+     FROM ${connection.escapeId(tableName)}
+     ${whereClause}
+     ORDER BY name
+     LIMIT ${limit}`
+
+    console.log('SQL: ', sql)
+
+    connection.query(sql, [lastItem], function(err, result) {
+      if (err) return callback(err)
+      return callback(null, result)
+    })
+  } else {
+    console.log('FIRST PAGE MODE')
+    let whereClause = " WHERE name > '' "
+    let sql = `SELECT *
+       FROM ${connection.escapeId(tableName)}
+       ${whereClause}
+       ORDER BY name
+       LIMIT ${limit}`
+
+    console.log('SQL: ', sql)
+
+    connection.query(sql, function(err, result) {
+      if (err) return callback(err)
+      return callback(null, result)
+    })
+  }
+
+  connection.end(err => err)
+}
+
+const dal = {
+  addInstrument,
+  getInstrument,
+  updateInstrument,
+  deleteInstrument,
+  listInstruments
+}
 
 module.exports = dal
