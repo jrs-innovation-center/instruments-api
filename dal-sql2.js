@@ -29,7 +29,20 @@ const updateInstrument = (instrument, callback) => update(instrument, callback)
 const deleteInstrument = (instrumentId, callback) =>
   deleteRow('instrument', instrumentId, callback)
 
-const listInstruments = (lastItem, filter, limit, callback) => {}
+const listInstruments = (lastItem, filter, limit, callback) => {
+  // filter = "group:strings"
+  if (filter) {
+    const arrFilter = split(':', filter) // ['','']
+    const filterField = head(arrFilter) === 'group'
+      ? 'instrumentGroup'
+      : head(arrFilter) // group  --> instrumentGroup
+    const filterValue = last(arrFilter)
+    //filter = "instrumentGroup:strings"
+    filter = `${filterField}:${filterValue}`
+  }
+
+  queryDB('instrument', lastItem, filter, limit, formatInstrument, callback)
+}
 
 ////////////////////
 //     orchestra
@@ -94,7 +107,7 @@ const read = (tableName, columnName, id, formatter, callback) => {
       function(err, result) {
         if (err) return callback(err)
         if (propOr(0, 'length', result) > 0) {
-          const formattedResult = formatter(result)
+          const formattedResult = formatter(head(result))
           console.log('Formatted Result: ', formattedResult)
           return callback(null, formattedResult)
         } else {
@@ -196,7 +209,6 @@ const prepInstrumentForUpdate = instrument => {
 }
 
 const formatInstrument = instrument => {
-  instrument = head(instrument)
   instrument = assoc('_id', prop('ID', instrument), instrument)
   instrument = assoc('group', prop('instrumentGroup', instrument), instrument)
   return compose(
@@ -235,7 +247,63 @@ const formatOrchestra = arrOrchestraRows => {
   return assoc('musicians', child, parent)
 }
 
-const queryDB = (tableName, lastItem, filter, limit, callback) => {}
+const queryDB = (tableName, lastItem, filter, limit, formatter, callback) => {
+  limit = limit ? limit : 5
+
+  const connection = createConnection()
+
+  if (filter) {
+    console.log('FILTER MODE')
+    // filter  = "category:Oboe"
+    const arrFilter = split(':', filter) // ['category','Oboe']
+    const filterField = head(arrFilter)
+    const filterValue = last(arrFilter)
+
+    // SELECT *
+    // FROM instrument
+    // WHERE category = 'oboe'
+    const sql = `SELECT *
+    FROM ${connection.escapeId(tableName)}
+    WHERE ${filterField} = ?
+    ORDER BY name
+    LIMIT ${limit}`
+
+    console.log('sql:', sql)
+
+    connection.query(sql, [filterValue], function(err, result) {
+      if (err) return callback(err)
+      return callback(null, map(formatter, result))
+    })
+  } else if (lastItem) {
+    console.log('NEXT PAGE MODE')
+
+    const sql = `SELECT *
+    FROM ${connection.escapeId(tableName)}
+    WHERE name > ?
+    ORDER BY name
+    LIMIT ${limit}`
+
+    console.log('SQL', sql)
+
+    connection.query(sql, [lastItem], function(err, result) {
+      if (err) return callback(err)
+      return callback(null, map(formatter, result))
+    })
+  } else {
+    console.log('SIMPLE LIST. FIRST PAGE')
+    const sql = `SELECT *
+    FROM ${connection.escapeId(tableName)}
+    ORDER BY name
+    LIMIT ${limit}`
+
+    console.log('SQL', sql)
+
+    connection.query(sql, function(err, result) {
+      if (err) return callback(err)
+      return callback(null, map(formatter, result))
+    })
+  }
+}
 
 const dal = {
   addInstrument,
