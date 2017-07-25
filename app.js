@@ -2,8 +2,8 @@ require('dotenv').config()
 
 const express = require('express')
 const app = express()
-//const dal = require('./dal.js')
-const dal = require('./dal-sql2.js')
+const dal = require('./dal.js')
+//const dal = require('./dal-sql2.js')
 const port = process.env.PORT || 4000
 const HTTPError = require('node-http-error')
 const bodyParser = require('body-parser')
@@ -114,6 +114,20 @@ app.get('/instruments', function(req, res, next) {
   dal.listInstruments(lastItem, filter, limit, function(err, data) {
     if (err) return next(new HTTPError(err.status, err.message, err))
     res.status(200).send(data)
+  })
+})
+
+// GET A SINGLE ORCHESTRA (SEASON) AND ASSOCIATED MUSICIANS
+app.get('/orchestras/:id', function(req, res, next) {
+  const orchestraID = req.params.id
+
+  dal.getOrchestra(orchestraID, function(err, data) {
+    if (err) return next(new HTTPError(err.status, err.message, err))
+    if (data) {
+      res.status(200).send(data)
+    } else {
+      next(new HTTPError(404, 'Not Found', { path: req.path }))
+    }
   })
 })
 

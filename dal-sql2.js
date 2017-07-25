@@ -10,34 +10,35 @@ const {
   prop,
   map,
   split,
-  last
+  last,
+  pick
 } = require('ramda')
+
+////////////////
+// instruments
+///////////////
 
 const addInstrument = (instrument, callback) => {
   createInstrument(instrument, callback)
 }
 const getInstrument = (instrumentId, callback) =>
-  read('instrument', instrumentId, formatInstrument, callback)
+  read('instrument', 'ID', instrumentId, formatInstrument, callback)
+
 const updateInstrument = (instrument, callback) => update(instrument, callback)
 
 const deleteInstrument = (instrumentId, callback) =>
   deleteRow('instrument', instrumentId, callback)
 
-const listInstruments = (lastItem, filter, limit, callback) => {
-  if (filter) {
-    const arrFilter = split(':', filter)
-    const filterField = head(arrFilter) === 'group'
-      ? 'instrumentGroup'
-      : head(arrFilter)
-    const filterValue = last(arrFilter)
+const listInstruments = (lastItem, filter, limit, callback) => {}
 
-    filter = `${filterField}:${filterValue}`
-  }
+////////////////////
+//     orchestra
+////////////////////
 
-  queryDB('instrument', lastItem, filter, limit, function(err, data) {
-    if (err) return callback(err)
-    callback(null, map(formatInstrument, data))
-  })
+const getOrchestra = (orchestraId, callback) => {
+  console.log('orchestraId: ', orchestraId)
+
+  read('vOrchestra', 'orchestraId', orchestraId, formatOrchestra, callback)
 }
 
 //////////////////////////////
@@ -77,17 +78,23 @@ const createInstrument = (instrument, callback) => {
   }
 }
 
-const read = (tableName, id, formatter, callback) => {
+const read = (tableName, columnName, id, formatter, callback) => {
   if (id && tableName) {
     const connection = createConnection()
 
     connection.query(
-      'SELECT * FROM ' + connection.escapeId(tableName) + ' WHERE ID = ? ',
+      'SELECT * FROM ' +
+        connection.escapeId(tableName) +
+        ' WHERE ' +
+        connection.escapeId(columnName) +
+        ' = ? ',
+      //SELECT * FROM vOrchestra WHERE orchestraID = 2
+
       [id],
       function(err, result) {
         if (err) return callback(err)
         if (propOr(0, 'length', result) > 0) {
-          const formattedResult = formatter(head(result))
+          const formattedResult = formatter(result)
           console.log('Formatted Result: ', formattedResult)
           return callback(null, formattedResult)
         } else {
@@ -189,6 +196,7 @@ const prepInstrumentForUpdate = instrument => {
 }
 
 const formatInstrument = instrument => {
+  instrument = head(instrument)
   instrument = assoc('_id', prop('ID', instrument), instrument)
   instrument = assoc('group', prop('instrumentGroup', instrument), instrument)
   return compose(
@@ -199,71 +207,43 @@ const formatInstrument = instrument => {
   )(instrument)
 }
 
-const queryDB = (tableName, lastItem, filter, limit, callback) => {
-  limit = limit ? limit : 5
-
-  const connection = createConnection()
-
-  if (filter) {
-    console.log('FILTER MODE')
-    const arrFilter = split(':', filter)
-    const filterField = head(arrFilter)
-    const filterValue = last(arrFilter)
-
-    let whereClause = ` WHERE ${filterField} = ?`
-    let sql = `SELECT *
-       FROM ${connection.escapeId(tableName)}
-       ${whereClause}
-       ORDER BY name
-       LIMIT ${limit}`
-
-    console.log('SQL: ', sql)
-
-    connection.query(sql, [filterValue], function(err, result) {
-      if (err) return callback(err)
-      return callback(null, result)
-    })
-  } else if (lastItem) {
-    console.log('NEXT PAGE MODE')
-    let whereClause = ' WHERE name > ? '
-    let sql = `SELECT *
-     FROM ${connection.escapeId(tableName)}
-     ${whereClause}
-     ORDER BY name
-     LIMIT ${limit}`
-
-    console.log('SQL: ', sql)
-
-    connection.query(sql, [lastItem], function(err, result) {
-      if (err) return callback(err)
-      return callback(null, result)
-    })
-  } else {
-    console.log('FIRST PAGE MODE')
-    let whereClause = " WHERE name > '' "
-    let sql = `SELECT *
-       FROM ${connection.escapeId(tableName)}
-       ${whereClause}
-       ORDER BY name
-       LIMIT ${limit}`
-
-    console.log('SQL: ', sql)
-
-    connection.query(sql, function(err, result) {
-      if (err) return callback(err)
-      return callback(null, result)
-    })
-  }
-
-  connection.end(err => err)
+const formatOrchestra = arrOrchestraRows => {
+  /*
+  {
+    orchestraID: 2,
+    name: 'Spring 2016 Pops',
+    seasonStart: '2016-04-01',
+    seasonEnd: '2016-06-30',
+    musicians: [
+      {musicianID: 1, firstName: 'Jeff', lastName: 'Smith', chair: 1, instrument: 'piccolo'},
+      {musicianID: 1, firstName: 'Sally', lastName: 'Smith', chair: 1, instrument: 'oboe'},
+      {musicianID: 1, firstName: 'Steve', lastName: 'Smith', chair: 1, instrument: 'violin'}
+    ]
 }
+  */
+  const parent = pick(
+    ['orchestraID', 'name', 'seasonStart', 'seasonEnd'],
+    head(arrOrchestraRows)
+  )
+
+  const child = map(
+    r =>
+      pick(['musicianID', 'firstName', 'lastName', 'chair', 'instrument'], r),
+    arrOrchestraRows
+  )
+
+  return assoc('musicians', child, parent)
+}
+
+const queryDB = (tableName, lastItem, filter, limit, callback) => {}
 
 const dal = {
   addInstrument,
   getInstrument,
   updateInstrument,
   deleteInstrument,
-  listInstruments
+  listInstruments,
+  getOrchestra
 }
 
 module.exports = dal
